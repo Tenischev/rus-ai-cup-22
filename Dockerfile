@@ -1,4 +1,4 @@
-FROM maven:3-openjdk-17
+FROM gradle:7.3-jdk17
 RUN microdnf install jq unzip
 
 ENV MOUNT_POINT="/opt/mount-point"
@@ -9,7 +9,7 @@ CMD ["bash", "entrypoint.sh"]
 
 # TODO: wtf doesnt work?
 # RUN mvn dependency:go-offline
-RUN mvn package && rm -rf target
+RUN gradle build
 
 # TODO
 ENV RAM_MB=256
