@@ -6,6 +6,7 @@ import ai_cup_22.model.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 public class MyStrategy {
@@ -24,7 +25,12 @@ public class MyStrategy {
     private Loot closestAmmo;
     private Loot closestAmmoForMyWeapon;
     private Loot closestCoolGun;
-    private DebugInterface debug;
+    private Optional<DebugInterface> debug;
+
+    // In enemy long range aim
+    // Go direct to enemy with drinking potion
+    // To close to border
+    // Surrounded by enemies
 
     public MyStrategy(ai_cup_22.model.Constants constants) {
         MyStrategy.constants = constants;
@@ -44,7 +50,7 @@ public class MyStrategy {
     }
 
     public ai_cup_22.model.Order getOrder(ai_cup_22.model.Game game, DebugInterface debugInterface) {
-        debug = debugInterface;
+        debug = Optional.ofNullable(debugInterface);
         Map<Integer, UnitOrder> orders = new HashMap<>();
         enemies = Stream.of(game.getUnits()).filter(u -> u.getPlayerId() != game.getMyId()).toList();
         myUnits = Stream.of(game.getUnits()).filter(u -> u.getPlayerId() == game.getMyId()).toList();
@@ -154,7 +160,7 @@ public class MyStrategy {
                         if (unit.getAction() == null || unit.getAction().getActionType() != ActionType.LOOTING) {
                             System.out.println("Drop current weapon!");
                             resultAction = new ActionOrder.DropWeapon();
-                            ammoMemory.remove(unit.getId());
+                            gunMemory.remove(unit.getId());
                         } else {
                             System.out.println("Drop in process");
                         }
@@ -404,19 +410,23 @@ public class MyStrategy {
         return unit.getShield() + constants.getShieldPerPotion() < constants.getMaxShield();
     }
 
+    private boolean haveIDrinkPotion(Unit unit, ActionOrder resultAction) {
+        return unit.getShield() < (constants.getMaxShield() * 0.6) || !(resultAction instanceof ActionOrder.Aim);
+    }
+
     ////// Moving functions
 
     private Vec2 moveToMyAmmo(Unit unit) {
-        debug.addSegment(unit.getPosition(), closestAmmoForMyWeapon.getPosition(), 0.5, new Color(0, 1.0, 0, 0.5));
+        debug.ifPresent(d -> d.addSegment(unit.getPosition(), closestAmmoForMyWeapon.getPosition(), 0.5, new Color(0, 1.0, 0, 0.5)));
         return moveToTarget(unit.getPosition(), closestAmmoForMyWeapon);
     }
     private Vec2 moveToPotion(Unit unit) {
-        debug.addSegment(unit.getPosition(), closestPotion.getPosition(), 1.0, new Color(0, 0, 1.0, 0.75));
+        debug.ifPresent(d -> d.addSegment(unit.getPosition(), closestPotion.getPosition(), 1.0, new Color(0, 0, 1.0, 0.75)));
         return moveToTarget(unit.getPosition(), closestPotion);
     }
 
     private Vec2 moveToBestWeapon(Unit unit) {
-        debug.addSegment(unit.getPosition(), closestCoolGun.getPosition(), 0.5, new Color(1.0, 0, 0, 0.5));
+        debug.ifPresent(d -> d.addSegment(unit.getPosition(), closestCoolGun.getPosition(), 0.5, new Color(1.0, 0, 0, 0.5)));
         return moveToTarget(unit.getPosition(), closestCoolGun);
     }
     private Vec2 moveToWeapon(Unit unit) {
