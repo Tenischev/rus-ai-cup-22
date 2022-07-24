@@ -16,15 +16,14 @@ public class MyStrategy {
     private static HashMap<Integer, Loot> potionMemory = new HashMap<>();
     private static HashMap<Integer, Loot> gunMemory = new HashMap<>();
     private static HashMap<Integer, Loot> ammoMemory = new HashMap<>();
+    private static Map<Integer, Boolean> wasInRiskZone = new HashMap<>();
+    private static Map<Integer, Integer> retreatTicks = new HashMap<>();
 
     private List<Unit> enemies;
     private List<Unit> myUnits;
     private List<Loot> loot;
+    private List<Unit> targetToMe;
     private Zone zone;
-    private Loot closestPotion;
-    private Loot closestAmmo;
-    private Loot closestAmmoForMyWeapon;
-    private Loot closestCoolGun;
     private Optional<DebugInterface> debug;
 
     // In enemy long range aim
@@ -60,6 +59,11 @@ public class MyStrategy {
         return new Order(orders);
     }
     private void initUnitData(Unit unit) {
+        retreatTicks.merge(unit.getId(), 0, (a, b) -> Math.max(a - 1, b));
+        Loot closestPotion;
+        Loot closestAmmoForMyWeapon;
+        Loot closestCoolGun;
+
         if (potionMemory.get(unit.getId()) == null) {
             closestPotion = findClosesPotion(unit);
             potionMemory.put(unit.getId(), closestPotion);
@@ -67,12 +71,9 @@ public class MyStrategy {
             Loot candidate = findClosesPotion(unit);
             closestPotion = potionMemory.get(unit.getId());
             if (candidate != null && findDistance(unit, closestPotion) > findDistance(unit, candidate)) {
-                closestPotion = candidate;
                 potionMemory.put(unit.getId(), candidate);
             }
         }
-
-        closestAmmo = findClosesAmmo(unit);
 
         if (ammoMemory.get(unit.getId()) == null) {
             closestAmmoForMyWeapon = findAmmoForCurrentWeapon(unit);
@@ -81,7 +82,6 @@ public class MyStrategy {
             Loot candidate = findAmmoForCurrentWeapon(unit);
             closestAmmoForMyWeapon = ammoMemory.get(unit.getId());
             if (candidate != null && findDistance(unit, closestAmmoForMyWeapon) > findDistance(unit, candidate)) {
-                closestAmmoForMyWeapon = candidate;
                 ammoMemory.put(unit.getId(), candidate);
             }
         }
@@ -93,10 +93,20 @@ public class MyStrategy {
             Loot candidate = findClosesCoolGun(unit);
             closestCoolGun = gunMemory.get(unit.getId());
             if (candidate != null && findDistance(unit, closestCoolGun) > findDistance(unit, candidate)) {
-                closestCoolGun = candidate;
                 gunMemory.put(unit.getId(), candidate);
             }
         }
+
+        targetToMe = enemies.stream()
+                .filter(e -> e.getAim() > 0)
+                .filter(e -> {
+                    var deltaAngle = Math.atan(constants.getUnitRadius() / findDistance(e, unit));
+                    var direction = getAngle(e.getDirection());
+                    var unitAngle = getAngle(moveToTarget(e.getPosition(), unit.getPosition()));
+                    return direction < deltaAngle + unitAngle && direction > unitAngle - deltaAngle;
+                })
+                .filter(e -> constants.getWeapons()[e.getWeapon()].getProjectileSpeed() * constants.getWeapons()[e.getWeapon()].getProjectileLifeTime() >= findDistance(e, unit) + constants.getUnitRadius())
+                .toList();
     }
 
     private Loot findClosesCoolGun(Unit unit) {
@@ -133,16 +143,16 @@ public class MyStrategy {
 
         ActionOrder resultAction = null;
         Vec2 targetViewPoint = scanArea(unit);
-        Vec2 targetGoPoint = goToCenter(unit);
+        Vec2 targetGoPoint = goToNextRadialPoint(unit);
 
         if (shouldILookForShield(unit)) {
             System.out.println("Go to search potions");
-            if (canISeePotion()) {
+            if (canISeePotion(unit)) {
                 System.out.println("I see the potion, move!");
                 targetGoPoint = moveToPotion(unit);
                 if (canITakePotion(unit)) {
                     System.out.println("I could take potion!");
-                    resultAction = new ActionOrder.Pickup(closestPotion.getId());
+                    resultAction = new ActionOrder.Pickup(potionMemory.get(unit.getId()).getId());
                     potionMemory.remove(unit.getId());
                 }
             } else {
@@ -161,12 +171,13 @@ public class MyStrategy {
                             System.out.println("Drop current weapon!");
                             resultAction = new ActionOrder.DropWeapon();
                             gunMemory.remove(unit.getId());
+                            ammoMemory.remove(unit.getId()); // clean up old ammo
                         } else {
                             System.out.println("Drop in process");
                         }
                     } else {
                         System.out.println("Take the weapon!");
-                        resultAction = new ActionOrder.Pickup(closestCoolGun.getId());
+                        resultAction = new ActionOrder.Pickup(gunMemory.get(unit.getId()).getId());
                     }
                 }
             }
@@ -185,12 +196,12 @@ public class MyStrategy {
                 }
             } else {
                 System.out.println("Out of ammo, need to reload!");
-                if (canISeeAmmoForMyWeapon()) {
+                if (canISeeAmmoForMyWeapon(unit)) {
                     System.out.println("I see the ammo, move!");
                     targetGoPoint = moveToMyAmmo(unit);
                     if (canITakeMyAmmo(unit)) {
                         System.out.println("I could take the ammo!");
-                        resultAction = new ActionOrder.Pickup(closestAmmoForMyWeapon.getId());
+                        resultAction = new ActionOrder.Pickup(ammoMemory.get(unit.getId()).getId());
                         ammoMemory.remove(unit.getId());
                     }
                 } else {
@@ -202,28 +213,37 @@ public class MyStrategy {
         if (unit.getWeapon() != null && amISpawned(unit) && isISeeEnemy(unit) && resultAction == null) {
             System.out.println("I see an enemy!");
             if (doIHaveAmmo(unit)) {
-                boolean iCanShoot = canIShoot(unit);
-                boolean enemyInTarget = areEnemyInTarget(unit);
-                boolean enemyIsCloseEnough = areEnemyIsClose(unit);
+                var iCanShoot = canIShoot(unit);
+                var enemyInTarget = areEnemyInTarget(unit);
+                var enemyIsCloseEnough = areEnemyIsClose(unit);
                 System.out.printf("Shoot = %s, in target = %s, is close = %s%n", iCanShoot, enemyInTarget, enemyIsCloseEnough);
                 if (enemyIsCloseEnough) {
                     targetViewPoint = makeAim(unit);
                     resultAction = new ActionOrder.Aim(iCanShoot && enemyInTarget);
-                }/* else if (!enemyIsCloseEnough) {
-                    System.out.println("Go closer to enemy!");
-                    targetGoPoint = makeAim(unit);
-                }*/
+                } else {
+                    System.out.println("Get target!");
+                    targetViewPoint = makeAim(unit);
+                }
             }
         }
 
         if (shouldIDrinkShield(unit) && couldIDrinkShield(unit)) {
-            System.out.println("I should drink potion!");
-            resultAction = new ActionOrder.UseShieldPotion();
+            if (haveIDrinkPotion(unit, resultAction)) {
+                System.out.println("I should drink potion!");
+                resultAction = new ActionOrder.UseShieldPotion();
+            }
         }
 
-        if (!isHealthOptimal(unit)) {
+        if (!isHealthOptimal(unit) || amICloseToBorder(unit) || amIInEnemyRangeAndHeIsNotInMy(unit) || retreatTicks.get(unit.getId()) > 0) {
             System.out.println("Need to retreat!");
-            targetGoPoint = goToMedianCenter(unit);
+            System.out.println("Health " + isHealthOptimal(unit));
+            System.out.println("Border " + amICloseToBorder(unit));
+            System.out.println("Enemy range " +  amIInEnemyRangeAndHeIsNotInMy(unit));
+            System.out.println("Ticks " + retreatTicks.get(unit.getId()));
+            if (!isHealthOptimal(unit) || amICloseToBorder(unit) || amIInEnemyRangeAndHeIsNotInMy(unit)) {
+                retreatTicks.put(unit.getId(), 10);
+            }
+            targetGoPoint = goToNextRadialPoint(unit);
             targetViewPoint = targetGoPoint;
             if (resultAction instanceof ActionOrder.Aim) {
                 resultAction = null;
@@ -238,6 +258,56 @@ public class MyStrategy {
         System.out.printf("My orders:\n Go to\tX: %.2f\tY: %.2f\n View point\tX: %.2f\tY: %.2f\n Action is %s\n", targetGoPoint.getX(), targetGoPoint.getY(), targetViewPoint.getX(), targetViewPoint.getY(), resultAction != null ? resultAction.toString() : "null");
 
         return new UnitOrder(targetGoPoint, targetViewPoint, resultAction);
+    }
+
+    private boolean amIInEnemyRangeAndHeIsNotInMy(Unit unit) {
+        if (unit.getWeapon() == null) {
+            return false;
+        }
+        WeaponProperties weaponProperties = constants.getWeapons()[unit.getWeapon()];
+        var allOutOfRange = targetToMe.stream().noneMatch(e -> findDistance(e, unit) >= weaponProperties.getProjectileSpeed() * weaponProperties.getProjectileLifeTime());
+        return !targetToMe.isEmpty() && allOutOfRange;
+    }
+
+    private boolean amICloseToBorder(Unit unit) {
+        var center = zone.getCurrentCenter();
+        var r = findDistance(center, unit.getPosition());
+        var allowedDistance = getAllowedDistanceCoef(unit);
+        recalcRiskValue(unit, r);
+        System.out.println("Distance from center " + r + ", allowed coef " + allowedDistance + ", result " + (zone.getCurrentRadius() - (allowedDistance * constants.getViewDistance())));
+        return zone.getCurrentRadius() - (allowedDistance * constants.getViewDistance()) < r;
+    }
+
+    private void recalcRiskValue(Unit unit, double r) {
+        if (zone.getCurrentRadius() - (0.7 * constants.getViewDistance()) > r)
+            wasInRiskZone.put(unit.getId(), true);
+        else
+            wasInRiskZone.put(unit.getId(), false);
+    }
+
+    /**
+     * Return double value allowed part of zone radius for the unit
+     */
+    private double getAllowedDistanceCoef(Unit unit) {
+        return 0.5 + (wasInRiskZone.get(unit.getId()) != null && wasInRiskZone.get(unit.getId()) ? 0.4 : 0);
+    }
+
+    /**
+     * Search next walk point with shift to 10 degrees, radius is 2/3 of zone
+     */
+    private Vec2 goToNextRadialPoint(Unit unit) {
+        var center = zone.getNextCenter();
+        var unitVector = moveToTarget(center, unit.getPosition());
+        var angle = getAngle(unitVector);
+        angle += Math.PI / 10.0;
+        var x = zone.getNextRadius() * 0.66 * Math.cos(angle) + center.getX();
+        var y = zone.getNextRadius() * 0.66 * Math.sin(angle) + center.getY();
+        System.out.println("Next point is " + new Vec2(x, y) + ", angle was " + angle);
+        return moveToTarget(unit.getPosition(), new Vec2(x, y));
+    }
+
+    private double getAngle(Vec2 unitVector) {
+        return Math.atan2(unitVector.getY(), unitVector.getX());
     }
 
     private boolean shouldIDropMyGun(Unit unit) {
@@ -280,19 +350,17 @@ public class MyStrategy {
     }
 
     /**
-     * ?????????????? ? ????????? ?????????? ?????? ? ??????, ???? ???? ????????? ??? ?????????.
-     * ???????? ????????? ???????, ?? ???? ???? ????????? ??? ????????? ???? ?????????? ?? ?????? ????? ?? ????????
-     * ?????? ??? ?????? ?????.
+     * Loot could be taken only if circle of unit is cover loot
      */
     private boolean canITakePotion(Unit unit) {
-        return findDistance(unit, closestPotion) < constants.getUnitRadius();
+        return findDistance(unit, potionMemory.get(unit.getId())) < constants.getUnitRadius();
     }
 
     private boolean canITakeMyAmmo(Unit unit) {
-        return findDistance(unit, closestAmmoForMyWeapon) < constants.getUnitRadius();
+        return findDistance(unit, ammoMemory.get(unit.getId())) < constants.getUnitRadius();
     }
     private boolean canITakeBestWeapon(Unit unit) {
-        return findDistance(unit, closestCoolGun) < constants.getUnitRadius();
+        return findDistance(unit, gunMemory.get(unit.getId())) < constants.getUnitRadius();
     }
 
     private boolean canITakeWeapon(Unit unit) {
@@ -307,7 +375,13 @@ public class MyStrategy {
     private Loot findClosesLoot(Unit unit, List<Loot> loot, Class<? extends Item> lootType) {
         double distance = Integer.MAX_VALUE;
         Loot bestLoot = null;
-        List<Loot> filteredLoot = loot.stream().filter(l -> lootType.isInstance(l.getItem())).toList();
+        List<Loot> filteredLoot = loot.stream()
+                .filter(l -> lootType.isInstance(l.getItem()))
+                .filter(l -> {
+                    var distanceFromCenter = findDistance(zone.getCurrentCenter(), l.getPosition());
+                    return distanceFromCenter < zone.getCurrentRadius() - constants.getViewDistance() * 0.9;
+                })
+                .toList();
         for (Loot l1 : filteredLoot) {
             if (findDistance(l1.getPosition(), unit.getPosition()) < distance) {
                 distance = findDistance(l1.getPosition(), unit.getPosition());
@@ -317,16 +391,16 @@ public class MyStrategy {
         return bestLoot;
     }
 
-    private boolean canISeeAmmoForMyWeapon() {
-        return closestAmmoForMyWeapon != null;
+    private boolean canISeeAmmoForMyWeapon(Unit unit) {
+        return ammoMemory.get(unit.getId()) != null;
     }
 
     private boolean canISeeGun(Unit unit) {
-        return closestCoolGun != null;
+        return gunMemory.get(unit.getId()) != null;
     }
 
-    private boolean canISeePotion() {
-        return closestPotion != null;
+    private boolean canISeePotion(Unit unit) {
+        return potionMemory.get(unit.getId()) != null;
     }
 
     private boolean canISeeWeapon() {
@@ -417,17 +491,17 @@ public class MyStrategy {
     ////// Moving functions
 
     private Vec2 moveToMyAmmo(Unit unit) {
-        debug.ifPresent(d -> d.addSegment(unit.getPosition(), closestAmmoForMyWeapon.getPosition(), 0.5, new Color(0, 1.0, 0, 0.5)));
-        return moveToTarget(unit.getPosition(), closestAmmoForMyWeapon);
+        debug.ifPresent(d -> d.addSegment(unit.getPosition(), ammoMemory.get(unit.getId()).getPosition(), 0.5, new Color(0, 1.0, 0, 0.5)));
+        return moveToTarget(unit.getPosition(), ammoMemory.get(unit.getId()));
     }
     private Vec2 moveToPotion(Unit unit) {
-        debug.ifPresent(d -> d.addSegment(unit.getPosition(), closestPotion.getPosition(), 1.0, new Color(0, 0, 1.0, 0.75)));
-        return moveToTarget(unit.getPosition(), closestPotion);
+        debug.ifPresent(d -> d.addSegment(unit.getPosition(), potionMemory.get(unit.getId()).getPosition(), 1.0, new Color(0, 0, 1.0, 0.75)));
+        return moveToTarget(unit.getPosition(), potionMemory.get(unit.getId()));
     }
 
     private Vec2 moveToBestWeapon(Unit unit) {
-        debug.ifPresent(d -> d.addSegment(unit.getPosition(), closestCoolGun.getPosition(), 0.5, new Color(1.0, 0, 0, 0.5)));
-        return moveToTarget(unit.getPosition(), closestCoolGun);
+        debug.ifPresent(d -> d.addSegment(unit.getPosition(), gunMemory.get(unit.getId()).getPosition(), 0.5, new Color(1.0, 0, 0, 0.5)));
+        return moveToTarget(unit.getPosition(), gunMemory.get(unit.getId()));
     }
     private Vec2 moveToWeapon(Unit unit) {
         Loot loot = findClosesLoot(unit, Item.Weapon.class);
