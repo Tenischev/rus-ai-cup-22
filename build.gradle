@@ -3,7 +3,7 @@ plugins {
 }
 
 group 'ai_cup_22'
-version '1.0-SNAPSHOT'
+version '1.0'
 
 repositories {
     mavenCentral()
@@ -16,4 +16,14 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+jar {
+    manifest {
+        attributes(
+                'Main-Class': 'ai_cup_22.Runner',
+                "Implementation-Title": "Gradle",
+                "Implementation-Version": archiveVersion
+                )
+    }
 }

@@ -139,6 +139,7 @@ public class MyStrategy {
     }
 
     private UnitOrder getUnitOrder(Unit unit) {
+        System.out.println("Unit ID is " + unit.getId());
         initUnitData(unit);
 
         ActionOrder resultAction = null;
@@ -279,7 +280,11 @@ public class MyStrategy {
     }
 
     private void recalcRiskValue(Unit unit, double r) {
-        if (zone.getCurrentRadius() - (0.7 * constants.getViewDistance()) > r)
+        var fixCoef = 0.7;
+        if (zone.getCurrentRadius() < constants.getViewDistance() * 1.5) {
+            fixCoef = 0.15;
+        }
+        if (zone.getCurrentRadius() - (fixCoef * constants.getViewDistance()) > r)
             wasInRiskZone.put(unit.getId(), true);
         else
             wasInRiskZone.put(unit.getId(), false);
@@ -289,7 +294,11 @@ public class MyStrategy {
      * Return double value allowed part of zone radius for the unit
      */
     private double getAllowedDistanceCoef(Unit unit) {
-        return 0.5 + (wasInRiskZone.get(unit.getId()) != null && wasInRiskZone.get(unit.getId()) ? 0.4 : 0);
+        if (zone.getCurrentRadius() < constants.getViewDistance() * 1.5) {
+            return 0.1 + (wasInRiskZone.get(unit.getId()) != null && wasInRiskZone.get(unit.getId()) ? 0.2 : 0);
+        } else {
+            return 0.5 + (wasInRiskZone.get(unit.getId()) != null && wasInRiskZone.get(unit.getId()) ? 0.4 : 0);
+        }
     }
 
     /**
@@ -473,7 +482,8 @@ public class MyStrategy {
     }
 
     private boolean isISeeEnemy(Unit unit) {
-        return !enemies.isEmpty();
+        var enemy = findBestEnemyTarget(unit);
+        return !enemies.isEmpty() && findDistance(enemy, unit) < constants.getViewDistance();
     }
 
     private boolean couldIDrinkShield(Unit unit) {
@@ -515,19 +525,6 @@ public class MyStrategy {
     }
     private Vec2 moveToTarget(Vec2 position, Vec2 target) {
         return new Vec2(target.getX() - position.getX(), target.getY() - position.getY());
-    }
-
-    private Vec2 goToCenter(Unit unit) {
-        return moveToTarget(unit.getPosition(), zone.getNextCenter());
-    }
-    private Vec2 goToMedianCenter(Unit unit) {
-        return moveToTarget(unit.getPosition(), findMedianCenter());
-    }
-
-    private Vec2 findMedianCenter() {
-        return new Vec2(
-                (zone.getCurrentCenter().getX() + zone.getNextCenter().getX()) * 0.75,
-                (zone.getCurrentCenter().getY() + zone.getNextCenter().getY()) * 0.75);
     }
 
     public void debugUpdate(int displayedTick, DebugInterface debugInterface) {
